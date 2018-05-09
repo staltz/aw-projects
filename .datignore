@@ -1,0 +1,7 @@
+node_modules/.registry.nodejs.org
+node_modules/
+/lib/
+**/.DS_Store
+Thumbs.db
+lib
+node_modules
