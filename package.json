@@ -23,12 +23,13 @@
     "babel-register": "^6.4.3",
     "babelify": "^7.2.0",
     "mkdirp": "0.5.x",
+    "serve": "^6.5.6",
     "typescript": "^2.8.3"
   },
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "prebrowserify": "mkdirp dist && tsc",
     "browserify": "browserify lib/index.js -t babelify --outfile dist/main.js",
-    "start": "npm install && npm run browserify && echo 'OPEN index.html IN YOUR BROWSER'"
+    "start": "npm run browserify && serve -p 5665"
   }
 }

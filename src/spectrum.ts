@@ -11,6 +11,7 @@ namespace styles {
   export const container = style({
     position: 'relative',
     height: '100px',
+    backgroundColor: '#ffffff',
   });
 
   export const canvas = style({
@@ -19,7 +20,7 @@ namespace styles {
 
     $nest: {
       'rect:hover': {
-        opacity: 0.4,
+        opacity: 0.8,
       },
     },
   });
@@ -42,7 +43,7 @@ export type Sinks = {
   onion: Stream<Reducer<State>>;
 };
 
-const mycolor = color('#5B8BDB');
+const mycolor = color('#3B5BDB');
 
 const MAX_X = 100;
 const MAX_Y = 20;
@@ -65,7 +66,7 @@ function renderEvent(event: AWEvent, state: State) {
       x: x,
       width: timeToX(end, state) - x,
       height: MAX_Y,
-      fill: mycolor.spin(Math.random() * 360),
+      fill: mycolor.spin(360 * x / MAX_X),
     },
   });
 }
