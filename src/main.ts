@@ -1,9 +1,8 @@
 import xs, {Stream} from 'xstream';
-import {color} from 'csx';
 import dropRepeats from 'xstream/extra/dropRepeats';
 import flattenConcurrently from 'xstream/extra/flattenConcurrently';
 import {StateSource, Reducer, Lens} from 'cycle-onionify';
-import {div, h2, button, DOMSource, VNode} from '@cycle/dom';
+import {div, DOMSource, VNode} from '@cycle/dom';
 import {HTTPSource, RequestInput} from '@cycle/http';
 import isolate from '@cycle/isolate';
 import startOfToday = require('date-fns/start_of_today');
@@ -11,53 +10,33 @@ import addHours = require('date-fns/add_hours');
 import addSeconds = require('date-fns/add_seconds');
 import isAfter = require('date-fns/is_after');
 import isBefore = require('date-fns/is_before');
-import format = require('date-fns/format');
 import {AWBucket, AWEvent} from './types';
 import spectrum, {State as SpectrumState} from './spectrum';
-import {style} from 'typestyle';
+import header, {State as HeaderState} from './header';
 
 export type State = {
   hostname?: string;
   buckets: Array<AWBucket>;
   events: Array<AWEvent>;
   selectedDay: number;
-  timeWindow: {
-    start: Date;
-    end: Date;
-  };
+  days: Array<{start: Date; end: Date}>;
 };
 
-const recentDays = ((length: number) => {
-  let startOfThisWorkDay = addHours(startOfToday(), 4);
-  if (isAfter(startOfThisWorkDay, Date.now())) {
-    startOfThisWorkDay = addHours(startOfThisWorkDay, -24);
-  }
-  let result = [];
-  for (let i = 0; i < length; i++) {
-    const x = addHours(startOfThisWorkDay, -i * 24);
-    result.push({start: x, end: addHours(x, 24)});
-  }
-  return result;
-})(7);
-
-const isBetween = (
-  time: string | Date,
-  min: string | Date,
-  max: string | Date,
-) => {
+function isBetween(time: string | Date, min: Date, max: Date) {
   return isAfter(time, min) && isBefore(time, max);
-};
+}
 
 const spectrumLens: Lens<State, SpectrumState> = {
   get(parent: State): SpectrumState {
-    const {start, end} = parent.timeWindow;
+    const timeWindow = parent.days[parent.selectedDay];
+    const {start, end} = timeWindow;
     const happenedOnSelectedDay = (ev: AWEvent) => {
       const evStart = ev.timestamp;
       const evEnd = addSeconds(ev.timestamp, ev.duration);
       return isBetween(evStart, start, end) || isBetween(evEnd, start, end);
     };
     return {
-      timeWindow: parent.timeWindow,
+      timeWindow: timeWindow,
       events: parent.events.filter(happenedOnSelectedDay),
     };
   },
@@ -65,6 +44,23 @@ const spectrumLens: Lens<State, SpectrumState> = {
   // no set
   set(parent: State, child: SpectrumState): State {
     return parent;
+  },
+};
+
+const headerLens: Lens<State, HeaderState> = {
+  get(parent: State): HeaderState {
+    return {
+      hostname: parent.hostname || '',
+      days: parent.days.map(day => day.start),
+      selectedDay: parent.selectedDay,
+    };
+  },
+
+  set(parent: State, child: HeaderState): State {
+    return {
+      ...parent,
+      selectedDay: child.selectedDay,
+    };
   },
 };
 
@@ -79,26 +75,6 @@ export type Sinks = {
   http: Stream<RequestInput>;
   onion: Stream<Reducer<State>>;
 };
-
-export type Actions = {
-  changeDay$: Stream<number>;
-};
-
-function intent(domSource: DOMSource) {
-  return {
-    changeDay$: xs.merge(
-      domSource
-        .select('.previous')
-        .events('click')
-        .mapTo(-1),
-
-      domSource
-        .select('.next')
-        .events('click')
-        .mapTo(+1),
-    ),
-  };
-}
 
 const HOST = 'localhost:5600';
 
@@ -125,8 +101,8 @@ function http(httpSource: HTTPSource, state$: Stream<State>) {
           method: 'GET',
           category: 'events',
           query: {
-            start: state.timeWindow.start.toISOString(),
-            end: state.timeWindow.end.toISOString(),
+            start: state.days[state.selectedDay].start.toISOString(),
+            end: state.days[state.selectedDay].end.toISOString(),
           },
         })),
       ),
@@ -136,17 +112,26 @@ function http(httpSource: HTTPSource, state$: Stream<State>) {
   return xs.merge(infoReq$, bucketsReq$, eventsReq$);
 }
 
-function model(
-  actions: Actions,
-  httpSource: HTTPSource,
-): Stream<Reducer<State>> {
+function model(httpSource: HTTPSource): Stream<Reducer<State>> {
   const initReducer$ = xs.of(function initReducer(): State {
-    const selectedDay = 0;
+    const recentDays = ((length: number) => {
+      let startOfThisWorkDay = addHours(startOfToday(), 4);
+      if (isAfter(startOfThisWorkDay, Date.now())) {
+        startOfThisWorkDay = addHours(startOfThisWorkDay, -24);
+      }
+      let result = [];
+      for (let i = 0; i < length; i++) {
+        const x = addHours(startOfThisWorkDay, -i * 24);
+        result.push({start: x, end: addHours(x, 24)});
+      }
+      return result;
+    })(7);
+
     return {
       buckets: [],
       events: [],
-      selectedDay,
-      timeWindow: recentDays[selectedDay],
+      selectedDay: 0,
+      days: recentDays,
     };
   });
 
@@ -182,91 +167,34 @@ function model(
         },
     );
 
-  const changeDayReducer$ = actions.changeDay$.map(
-    delta =>
-      function changeDayReducer(prev: State): State {
-        const newSelectedDay = Math.max(
-          Math.min(prev.selectedDay - delta, recentDays.length - 1),
-          0,
-        );
-        if (newSelectedDay === prev.selectedDay) {
-          return prev;
-        }
-        return {
-          ...prev,
-          selectedDay: newSelectedDay,
-          timeWindow: recentDays[newSelectedDay],
-        };
-      },
-  );
-
-  return xs.merge(
-    initReducer$,
-    infoReducer$,
-    bucketsReducer$,
-    eventsReducer$,
-    changeDayReducer$,
-  );
+  return xs.merge(initReducer$, infoReducer$, bucketsReducer$, eventsReducer$);
 }
 
-const indigo = color('#3B5BDB');
-
-namespace styles {
-  export const header = style({
-    display: 'flex',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: '15px',
-    height: '60px',
-  });
-
-  export const title = style({
-    margin: '0',
-  });
-
-  export const button = style({
-    backgroundColor: indigo.toHexString(),
-    borderRadius: 2,
-    borderLeft: 'none',
-    borderRight: 'none',
-    borderTop: 'none',
-    borderBottom: `3px solid ${indigo.darken(10).toHexString()}`,
-    alignSelf: 'stretch',
-    color: 'white',
-    padding: '0 35px',
-  });
-}
-
-function view(state$: Stream<State>, spectrum$: Stream<VNode>): Stream<VNode> {
+function view(header$: Stream<VNode>, spectrum$: Stream<VNode>): Stream<VNode> {
   return xs
-    .combine(state$, spectrum$)
-    .map(([state, spectrum]) =>
-      div([
-        div(`.header.${styles.header}`, [
-          button(`.previous.${styles.button}`, 'prev'),
-          h2(
-            `.title.${styles.title}`,
-            (state.hostname || '') +
-              ' ' +
-              format(state.timeWindow.start, 'YYYY-MM-DD'),
-          ),
-          button(`.next.${styles.button}`, 'next'),
-        ]),
-        spectrum,
-      ]),
-    );
+    .combine(header$, spectrum$)
+    .map(([header, spectrum]) => div([header, spectrum]));
 }
 
 export default function main(sources: Sources): Sinks {
-  const spectrumSinks = isolate(spectrum, {
+  const spectrumSinks: Sinks = isolate(spectrum, {
     onion: spectrumLens,
     '*': 'spectrum',
   })(sources);
 
-  const actions = intent(sources.dom);
+  const headerSinks: Sinks = isolate(header, {
+    onion: headerLens,
+    '*': 'header',
+  })(sources);
+
   const request$ = http(sources.http, sources.onion.state$);
-  const vdom$ = view(sources.onion.state$, spectrumSinks.dom);
-  const reducer$ = model(actions, sources.http);
+  const vdom$ = view(headerSinks.dom, spectrumSinks.dom);
+  const mainReducer$ = model(sources.http);
+  const reducer$ = xs.merge(
+    mainReducer$,
+    spectrumSinks.onion,
+    headerSinks.onion,
+  );
 
   return {
     dom: vdom$,
